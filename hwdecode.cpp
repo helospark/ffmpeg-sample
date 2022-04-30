@@ -33,18 +33,173 @@
  */
 
 #include <stdio.h>
+#include "debugimage.h"
+
+#include <cassert>
 
 extern "C" {
+#include "helper.h"
 #include <libavcodec/avcodec.h>
+#include <libswscale/swscale.h>
 #include <libavformat/avformat.h>
+#include <libavfilter/buffersrc.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/hwcontext.h>
 #include <libavutil/opt.h>
 #include <libavutil/avassert.h>
 #include <libavutil/imgutils.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+
+
+const char *filter_descr = "scale_vaapi=800:600:format=yuv420p,hwdownload";
 
 static AVBufferRef *hw_device_ctx = NULL;
 static enum AVPixelFormat hw_pix_fmt;
+AVPixelFormat FORMAT = AV_PIX_FMT_RGB24;
+
+int imageNumber = 0;
+char buf[200];
+
+AVCodecContext *decoder_ctx;
+
+AVFilterContext *buffersink_ctx;
+AVFilterContext *buffersrc_ctx;
+AVFilterGraph *filter_graph;
+
+/**
+static int init_filters(AVCodecContext* dec_ctx)
+{
+    char args[512];
+    int ret;
+    AVFilter *buffersrc  = avfilter_get_by_name("buffer");
+    AVFilter *buffersink = avfilter_get_by_name("buffersink");
+    AVFilterInOut *outputs = NULL;
+    AVFilterInOut *inputs  = NULL;
+    filter_graph = avfilter_graph_alloc();
+
+
+    if ((ret = avfilter_graph_parse2(filter_graph, filter_descr,
+                                    &inputs, &outputs)) < 0)
+        return ret;
+
+
+    for(unsigned i=0; i<filter_graph->nb_filters; i++) {
+        filter_graph->filters[i]->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+    }
+
+
+
+
+    enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_VAAPI_VLD, AV_PIX_FMT_VAAPI, AV_PIX_FMT_NONE };
+    AVBufferSinkParams *buffersink_params;
+    // buffer video source: the decoded frames from the decoder will be inserted here. 
+    snprintf(args, sizeof(args),
+            "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
+            dec_ctx->width, dec_ctx->height, hw_pix_fmt,
+            805, 48266, //dec_ctx->time_base.num, dec_ctx->time_base.den,
+            dec_ctx->sample_aspect_ratio.num, dec_ctx->sample_aspect_ratio.den);
+    ret = avfilter_graph_create_filter(&buffersrc_ctx, buffersrc, "in",
+                                       args, NULL, filter_graph);
+
+
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot create buffer source\n");
+        return ret;
+    }
+    avfilter_link(buffersrc_ctx, 0, inputs->filter_ctx, inputs->pad_idx);
+
+
+
+    // buffer video sink: to terminate the filter chain.
+    buffersink_params = av_buffersink_params_alloc();
+    buffersink_params->pixel_fmts = pix_fmts;
+    ret = avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out",
+                                       NULL, buffersink_params, filter_graph);
+
+    av_free(buffersink_params);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot create buffer sink\n");
+        return ret;
+    }
+
+    avfilter_link(outputs->filter_ctx, 0, buffersink_ctx, 0);
+
+
+
+    for(unsigned i=0; i<filter_graph->nb_filters; i++) {
+        filter_graph->filters[i]->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+    }
+
+
+
+    if ((ret = avfilter_graph_config(filter_graph, NULL)) < 0)
+        return ret;
+    return 0;
+}
+*/
+
+
+AVFilterContext* m_bufferSrc = nullptr;
+AVFilterContext* m_bufferSink = nullptr;
+AVFilterContext* m_formatFilter = nullptr;
+
+void initInputFilters(AVFilterInOut* inputs);
+void initOutputFilters(AVFilterInOut* outputs);
+void filterFrame(AVFrame* inFrame, AVFrame* outFrame);
+
+
+void initFilters()
+{
+    AVFilterInOut* inputs = nullptr;
+    AVFilterInOut* outputs = nullptr;
+    filter_graph = avfilter_graph_alloc();
+    assert(avfilter_graph_parse2(filter_graph, "format=vaapi_vld", &inputs, &outputs) == 0);
+
+    for(unsigned i=0; i<filter_graph->nb_filters; i++) {
+        filter_graph->filters[i]->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        assert(filter_graph->filters[i]->hw_device_ctx != nullptr);
+    }
+
+    initInputFilters(inputs);
+    initOutputFilters(outputs);
+
+    assert(avfilter_graph_config(filter_graph, nullptr) == 0);
+}
+void initInputFilters(AVFilterInOut* inputs)
+{
+    assert(inputs != nullptr);
+    assert(inputs->next == nullptr);
+
+    char args[512];
+    snprintf(args, sizeof(args),
+            "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
+            decoder_ctx->width, decoder_ctx->height, hw_pix_fmt,
+            1, 60,
+            1, 1);
+
+    assert(avfilter_graph_create_filter(&m_bufferSrc, avfilter_get_by_name("buffer"), "in",
+                                        args, nullptr, filter_graph) == 0);
+    assert(avfilter_link(m_bufferSrc, 0, inputs->filter_ctx, inputs->pad_idx) == 0);
+}
+void initOutputFilters(AVFilterInOut* outputs)
+{
+    assert(outputs != nullptr);
+    assert(outputs->next == nullptr);
+
+    assert(avfilter_graph_create_filter(&m_bufferSink, avfilter_get_by_name("buffersink"), "out",
+                                       nullptr, nullptr, filter_graph) == 0);
+    assert(avfilter_graph_create_filter(&m_formatFilter, avfilter_get_by_name("format"), "format",
+                                       "vaapi_vld", nullptr, filter_graph) == 0);
+    assert(avfilter_link(outputs->filter_ctx, outputs->pad_idx, m_formatFilter, 0) == 0);
+    assert(avfilter_link(m_formatFilter, 0, m_bufferSink, 0) == 0);
+}
+void filterFrame(AVFrame* inFrame, AVFrame* outFrame)
+{
+    assert(av_buffersrc_add_frame_flags(m_bufferSrc, inFrame, AV_BUFFERSRC_FLAG_KEEP_REF) == 0);
+    assert(av_buffersink_get_frame(m_bufferSink, outFrame) == 0);
+}
+
 
 static int hw_decoder_init(AVCodecContext *ctx, const enum AVHWDeviceType type)
 {
@@ -78,6 +233,7 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet)
 {
     AVFrame *frame = NULL, *sw_frame = NULL;
     AVFrame *tmp_frame = NULL;
+    AVFrame *filt_frame;
     uint8_t *buffer = NULL;
     int size;
     int ret = 0;
@@ -92,7 +248,7 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet)
         if (!(frame = av_frame_alloc()) || !(sw_frame = av_frame_alloc())) {
             fprintf(stderr, "Can not alloc frame\n");
             ret = AVERROR(ENOMEM);
-            goto fail;
+            return;
         }
 
         ret = avcodec_receive_frame(avctx, frame);
@@ -102,9 +258,36 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet)
             return 0;
         } else if (ret < 0) {
             fprintf(stderr, "Error while decoding\n");
-            goto fail;
+            return;
         }
 
+        // push the decoded frame into the filtergraph
+        if (av_buffersrc_add_frame_flags(m_bufferSrc, frame, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
+            av_log(NULL, AV_LOG_ERROR, "Error while feeding the filtergraph\n");
+            break;
+        }
+        // pull filtered frames from the filtergraph
+        while (1) {
+            filt_frame = av_frame_alloc();
+            ret = av_buffersink_get_frame(m_bufferSrc, filt_frame);
+            if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+                break;
+            if (ret < 0)
+                return;
+            
+            imageNumber += 1;
+
+            if (imageNumber % 100 == 0) {
+                snprintf(buf, sizeof(buf), "/tmp/%s_%03d.ppm", "hwdecode", imageNumber);
+                ppm_save(filt_frame->data[0], filt_frame->linesize[0], filt_frame->width, filt_frame->height, buf);
+            }
+
+
+
+            av_frame_free(&filt_frame);
+            imageNumber += 1;
+        }
+/*
         if (frame->format == hw_pix_fmt) {
             // retrieve data from GPU to CPU 
             if ((ret = av_hwframe_transfer_data(sw_frame, frame, 0)) < 0) {
@@ -112,33 +295,40 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet)
                 goto fail;
             }
             tmp_frame = sw_frame;
-        } else
+        } else {
             tmp_frame = frame;
-
-        size = av_image_get_buffer_size(tmp_frame->format, tmp_frame->width,
-                                        tmp_frame->height, 1);
-        
-        buffer = av_malloc(size);
-        if (!buffer) {
-            fprintf(stderr, "Can not alloc buffer\n");
-            ret = AVERROR(ENOMEM);
-            goto fail;
-        }
-        ret = av_image_copy_to_buffer(buffer, size,
-                                      (const uint8_t * const *)tmp_frame->data,
-                                      (const int *)tmp_frame->linesize, tmp_frame->format,
-                                      tmp_frame->width, tmp_frame->height, 1);
-        if (ret < 0) {
-            fprintf(stderr, "Can not copy image to buffer\n");
-            goto fail;
         }
 
-/*        if ((ret = fwrite(buffer, 1, size, output_file)) < 0) {
-            fprintf(stderr, "Failed to dump raw data.\n");
-            goto fail;
-        }*/
+            size = av_image_get_buffer_size(tmp_frame->format, tmp_frame->width,
+                                           tmp_frame->height, 1);
+           buffer = av_malloc(size);
+           if (!buffer) {
+               fprintf(stderr, "Can not alloc buffer\n");
+               ret = AVERROR(ENOMEM);
+               goto fail;
+           }
+           ret = av_image_copy_to_buffer(buffer, size,
+                                         (const uint8_t * const *)tmp_frame->data,
+                                         (const int *)tmp_frame->linesize, tmp_frame->format,
+                                         tmp_frame->width, tmp_frame->height, 1);
 
-    fail:
+        imageNumber += 1;
+
+
+        AVFrame* pFrameRGB=allocateFrame(800, 600, FORMAT);
+        sws_scale(sws_ctx, (uint8_t const * const *)tmp_frame->data,
+                tmp_frame->linesize, 0, tmp_frame->height,
+                pFrameRGB->data, pFrameRGB->linesize);
+
+        if (imageNumber % 100 == 0) {
+            snprintf(buf, sizeof(buf), "/tmp/%s_%03d.ppm", "hwdecode", imageNumber);
+            ppm_save(pFrameRGB->data[0], pFrameRGB->linesize[0], pFrameRGB->width, pFrameRGB->height, buf);
+        }
+
+        av_freep(&pFrameRGB->opaque);
+        av_frame_free(&pFrameRGB);
+        */
+
         av_frame_free(&frame);
         av_frame_free(&sw_frame);
         av_freep(&buffer);
@@ -152,7 +342,7 @@ int main(int argc, char *argv[])
     AVFormatContext *input_ctx = NULL;
     int video_stream, ret;
     AVStream *video = NULL;
-    AVCodecContext *decoder_ctx = NULL;
+    decoder_ctx = NULL;
     AVCodec *decoder = NULL;
     AVPacket packet;
     enum AVHWDeviceType type;
@@ -163,7 +353,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    // av_log_set_level(AV_LOG_DEBUG);
+    av_log_set_level(AV_LOG_TRACE);
 
     type = av_hwdevice_find_type_by_name(argv[1]);
     if (type == AV_HWDEVICE_TYPE_NONE) {
@@ -234,6 +424,9 @@ int main(int argc, char *argv[])
    long long start = time(NULL);
 
     long frames = 0;
+
+    initFilters();
+
 
     /* actual decoding and dump the raw data */
     while (ret >= 0) {

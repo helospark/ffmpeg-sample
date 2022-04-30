@@ -33,9 +33,11 @@
  */
 
 #include <stdio.h>
+#include "debugimage.h"
 
 
 extern "C" {
+#include "helper.h"
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libavformat/avformat.h>
@@ -45,17 +47,10 @@ extern "C" {
 #include <libavutil/avassert.h>
 #include <libavutil/imgutils.h>
 
-AVFrame* allocateFrame(int width, int height)
-{
-    AVFrame* pFrameRGB=av_frame_alloc();
-    int numBytes=avpicture_get_size(AV_PIX_FMT_RGBA, width, height);
+int imageNumber = 0;
+char buf[200];
 
-    uint8_t* buffer=(uint8_t *)av_malloc(numBytes*sizeof(uint8_t));
-    avpicture_fill((AVPicture *)pFrameRGB, buffer, AV_PIX_FMT_RGBA,
-                    width, height);
-    pFrameRGB->opaque = buffer;
-    return pFrameRGB;
-}
+AVPixelFormat FORMAT = AV_PIX_FMT_RGB24;
 
 static int decode_write(AVCodecContext *avctx, AVPacket *packet, struct SwsContext* sws_ctx)
 {
@@ -88,7 +83,7 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet, struct SwsConte
             goto fail;
         }
 
-            tmp_frame = frame;
+        tmp_frame = frame;
 
         size = av_image_get_buffer_size(tmp_frame->format, tmp_frame->width,
                                         tmp_frame->height, 1);
@@ -105,19 +100,22 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet, struct SwsConte
         }
 
 
-        AVFrame* pFrameRGB=allocateFrame(800, 600);
+        AVFrame* pFrameRGB=allocateFrame(800, 600, FORMAT);
 
         sws_scale(sws_ctx, (uint8_t const * const *)tmp_frame->data,
                 tmp_frame->linesize, 0, tmp_frame->height,
                 pFrameRGB->data, pFrameRGB->linesize);
 
+        imageNumber += 1;
+
+        if (imageNumber % 100 == 0) {
+            snprintf(buf, sizeof(buf), "/tmp/%s_%03d.ppm", "swdecode", imageNumber);
+            ppm_save(pFrameRGB->data[0], pFrameRGB->linesize[0], pFrameRGB->width, pFrameRGB->height, buf);
+        }
+
         av_freep(&pFrameRGB->opaque);
         av_frame_free(&pFrameRGB);
 
-/*        if ((ret = fwrite(buffer, 1, size, output_file)) < 0) {
-            fprintf(stderr, "Failed to dump raw data.\n");
-            goto fail;
-        }*/
     }
 
     fail:
@@ -185,7 +183,7 @@ int main(int argc, char *argv[])
                                 decoder_ctx->pix_fmt,
                                 800,
                                 600,
-                                AV_PIX_FMT_RGBA,
+                                FORMAT,
                                 SWS_BILINEAR,
                                 NULL,
                                 NULL,
