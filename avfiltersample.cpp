@@ -52,12 +52,10 @@ static int init_filters(const char *filters_descr)
 {
     char args[512];
     int ret;
-    AVFilter *buffersrc  = avfilter_get_by_name("buffer");
-    AVFilter *buffersink = avfilter_get_by_name("buffersink");
+    const AVFilter *buffersrc  = avfilter_get_by_name("buffer");
+    const AVFilter *buffersink = avfilter_get_by_name("buffersink");
     AVFilterInOut *outputs = avfilter_inout_alloc();
     AVFilterInOut *inputs  = avfilter_inout_alloc();
-    enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_RGB24, AV_PIX_FMT_NONE };
-    AVBufferSinkParams *buffersink_params;
     filter_graph = avfilter_graph_alloc();
     /* buffer video source: the decoded frames from the decoder will be inserted here. */
     snprintf(args, sizeof(args),
@@ -71,12 +69,9 @@ static int init_filters(const char *filters_descr)
         av_log(NULL, AV_LOG_ERROR, "Cannot create buffer source\n");
         return ret;
     }
-    /* buffer video sink: to terminate the filter chain. */
-    buffersink_params = av_buffersink_params_alloc();
-    buffersink_params->pixel_fmts = pix_fmts;
     ret = avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out",
-                                       NULL, buffersink_params, filter_graph);
-    av_free(buffersink_params);
+                                       NULL, NULL, filter_graph);
+
     if (ret < 0) {
         av_log(NULL, AV_LOG_ERROR, "Cannot create buffer sink\n");
         return ret;

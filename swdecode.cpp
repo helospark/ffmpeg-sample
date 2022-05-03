@@ -70,7 +70,7 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet, struct SwsConte
         if (!(frame = av_frame_alloc()) || !(sw_frame = av_frame_alloc())) {
             fprintf(stderr, "Can not alloc frame\n");
             ret = AVERROR(ENOMEM);
-            goto fail;
+            return -1;
         }
 
         ret = avcodec_receive_frame(avctx, frame);
@@ -80,27 +80,13 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet, struct SwsConte
             return 0;
         } else if (ret < 0) {
             fprintf(stderr, "Error while decoding\n");
-            goto fail;
+            return -1;
         }
 
         tmp_frame = frame;
 
-        size = av_image_get_buffer_size(tmp_frame->format, tmp_frame->width,
-                                        tmp_frame->height, 1);
-        buffer = av_malloc(size);
-        if (!buffer) {
-            fprintf(stderr, "Can not alloc buffer\n");
-            ret = AVERROR(ENOMEM);
-            goto fail;
-        }
 
-        if (ret < 0) {
-            fprintf(stderr, "Can not copy image to buffer\n");
-            goto fail;
-        }
-
-
-        AVFrame* pFrameRGB=allocateFrame(800, 600, FORMAT);
+        AVFrame* pFrameRGB=allocateFrame(400, 300, FORMAT);
 
         sws_scale(sws_ctx, (uint8_t const * const *)tmp_frame->data,
                 tmp_frame->linesize, 0, tmp_frame->height,
@@ -116,14 +102,11 @@ static int decode_write(AVCodecContext *avctx, AVPacket *packet, struct SwsConte
         av_freep(&pFrameRGB->opaque);
         av_frame_free(&pFrameRGB);
 
-    }
-
-    fail:
         av_frame_free(&frame);
         av_frame_free(&sw_frame);
         av_freep(&buffer);
-        if (ret < 0)
-            return ret;
+    }
+
 }
 
 int main(int argc, char *argv[])
@@ -136,15 +119,15 @@ int main(int argc, char *argv[])
     AVPacket packet;
     int i;
 
-    if (argc < 3) {
-        fprintf(stderr, "Usage: %s <device type> <input file>\n", argv[0]);
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <input file>\n", argv[0]);
         return -1;
     }
 
 
     /* open the input file */
-    if (avformat_open_input(&input_ctx, argv[2], NULL, NULL) != 0) {
-        fprintf(stderr, "Cannot open input file '%s'\n", argv[2]);
+    if (avformat_open_input(&input_ctx, argv[1], NULL, NULL) != 0) {
+        fprintf(stderr, "Cannot open input file '%s'\n", argv[1]);
         return -1;
     }
 
@@ -153,7 +136,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    av_dump_format(input_ctx, 0, argv[2], 0);
+    av_dump_format(input_ctx, 0, argv[1], 0);
 
     /* find the video stream information */
     ret = av_find_best_stream(input_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, &decoder, 0);
@@ -181,8 +164,8 @@ int main(int argc, char *argv[])
     struct SwsContext* sws_ctx = sws_getContext(decoder_ctx->width,
                                 decoder_ctx->height,
                                 decoder_ctx->pix_fmt,
-                                800,
-                                600,
+                                400,
+                                300,
                                 FORMAT,
                                 SWS_BILINEAR,
                                 NULL,

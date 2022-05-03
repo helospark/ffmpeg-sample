@@ -10,11 +10,10 @@
 static AVFrame* allocateFrame(int width, int height, AVPixelFormat format)
 {
     AVFrame* pFrameRGB=av_frame_alloc();
-    int numBytes=avpicture_get_size(format, width, height);
+    int numBytes=av_image_get_buffer_size(format, width, height, 16);
 
     uint8_t* buffer=(uint8_t *)av_malloc(numBytes*sizeof(uint8_t));
-    avpicture_fill((AVPicture *)pFrameRGB, buffer, format,
-                    width, height);
+    av_image_fill_arrays(pFrameRGB->data,pFrameRGB->linesize, buffer, format, width, height, 1);
     pFrameRGB->opaque = buffer;
     pFrameRGB->width = width;
     pFrameRGB->height = height;
