@@ -48,6 +48,10 @@ Run multithreaded version with:
 
     ./swdecode.out ~/Videos/sample.mp4
 
+On intel iGPU you also need:
+
+    sudo apt-get install intel-media-va-driver-non-free
+
 ## Check GPU usage
 
 While checking multithreaded decoding is easy by checking CPU usage, checking GPU requires custom program.
